@@ -1,0 +1,97 @@
+#!/usr/bin/env python
+
+"""
+Script checks if all the packages mentioned in the YAML conda file is a subset of the packages in the current conda environment.
+Incase any package is missing or there are version mismatches they are reported
+"""
+
+import argparse
+import subprocess
+import sys
+import yaml
+
+def parse_package(string_rep):
+    """Creates a new Package from the string representation of it
+
+    Parameters
+    ----------
+    string_rep: the string representation of a package (Ex. 'yaml=0.1.6=0')
+    """
+    items = string_rep.split("=")
+    name = items[0]
+    if len(items) > 1:
+        version = items[1]
+    else:
+        version = ''
+    return (name, version)
+
+def version_match(flexible_version, exact_version):
+    """Checks if the two versions match or not
+
+    Parameters
+    ----------
+    flexible_version: the version is flexible, i.e it can be empty, partial or have wildcards
+    exact_version: the complete version with all the details
+    """
+    if flexible_version == '': # corner case
+        return True
+
+    flexible_version_split = flexible_version.split('.')
+    exact_version_split = exact_version.split('.')
+
+    if len(flexible_version_split) > len(exact_version_split):
+        for i in range(len(exact_version_split), len(flexible_version_split)):
+            if flexible_version_split[i] != '*':
+                return False
+        flexible_version_split = flexible_version_split[:len(exact_version_split)]
+
+    prefix_limit = len(flexible_version_split)
+    for i in range(prefix_limit):
+        if flexible_version_split[i] != '*' and flexible_version_split[i] != exact_version_split[i]:
+            return False
+
+    return True
+
+def is_string(x):
+    """Checks if x is of type string or not"""
+    return type(x) == str
+
+def parse_args():
+    """Parses command line arguments given"""
+    argparser = argparse.ArgumentParser(description=__doc__)
+    argparser.add_argument('yaml_file', metavar='FILE', help="YAML conda file produced by 'conda env export' to compare against")
+    parsed = argparser.parse_args()
+    return parsed
+
+def main():
+    parsed = parse_args()
+
+    current_conda_env = subprocess.check_output(['conda', 'env', 'export'])
+    current_data = yaml.safe_load(current_conda_env)
+
+    with open(parsed.yaml_file, 'r') as file:
+        yaml_data = yaml.safe_load(file)
+
+    current_packages = dict(map(parse_package, filter(is_string, current_data['dependencies'])))
+    yaml_packages = dict(map(parse_package, filter(is_string, yaml_data['dependencies'])))
+    # Using the filter of "is_string", we ignore comparison of nested lists. Ex. Packages installed via pip.
+
+    ok = True
+
+    for name, version in yaml_packages.items():
+        if name in current_packages:
+            if not version_match(version, current_packages[name]):
+                ok = False
+                print("{} found but version mismatch. YAML version: {}, Running version: {}"
+                      .format(name, version, current_packages[name]))
+        else:
+            ok = False
+            print("{} not found".format(name))
+
+    if ok:
+        print("Success. All the packages mentioned in the YAML file are present in the running environment with matching version")
+    else:
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
